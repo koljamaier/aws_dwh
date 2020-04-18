@@ -3,6 +3,7 @@ from aws_cdk import (
     aws_sqs as sqs,
     aws_sns as sns,
     aws_sns_subscriptions as subs,
+    aws_emr as emr,
     core
 )
 
