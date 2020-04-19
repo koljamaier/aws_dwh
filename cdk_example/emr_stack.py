@@ -16,6 +16,7 @@ from aws_cdk import (
     aws_s3 as s3,
     aws_stepfunctions as sfn,
     aws_stepfunctions_tasks as sfnt,
+    aws_glue as glue,
     core,
 )
 from aws_cdk.core import CfnTag
@@ -69,7 +70,31 @@ def create_emr_service_role(scope: core.Construct) -> iam.Role:
 class EmrTestStack(core.Stack):
 
 
-    # TODO: Also define the output bucket for our spark-program. The definition can later be used by glue crawler
+    def _create_data_bucket(self):
+        """
+        This bucket will be the place where our EMR output data is stored. Also the glue crawler will use this
+        for inferring our schemas
+        """
+        bucket_name = f"capstone-uda-data"
+        bucket_id = f"{bucket_name}-bucket"
+
+        bucket = s3.Bucket(
+            self,
+            id=bucket_id,
+            bucket_name=bucket_name,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            block_public_access=s3.BlockPublicAccess(
+                block_public_acls=True,
+                block_public_policy=True,
+                ignore_public_acls=True,
+                restrict_public_buckets=True,
+            ),
+        )
+
+        return bucket
+
+
+
     def _create_emr_logging_bucket(self):
 
         bucket_name = (
@@ -96,14 +121,6 @@ class EmrTestStack(core.Stack):
     def _create_sfn_pipeline(self):
         pipeline_name = "EmrTest"
 
-        # ec2_subnet = ec2.SubnetConfiguration(
-        #     name="emr_vpc",  # self.subnet_private_fargate_name,
-        #     subnet_type=ec2.SubnetType.PRIVATE,
-        #     cidr_mask=23,
-        # )
-
-        # ec2_subnet.
-
         # Let the Stepfunction create a uniform instance group cluster
         # with 1 Master and 5 Core nodes
         create_cluster = sfn.Task(
@@ -111,17 +128,12 @@ class EmrTestStack(core.Stack):
             "CreateCluster",
             # this is very similar to the specification menu in AWS UI we used during the course
             task=sfnt.EmrCreateCluster(
-                name=pipeline_name, #sfn.Data.string_at("$.unique_id"),
+                name=pipeline_name,
                 applications=[
                     sfnt.EmrCreateCluster.ApplicationConfigProperty(name="spark")
                 ],
-                # specify the VPC net for our EMR cluster
+                # specify the cluster worker/master hardware
                 instances=sfnt.EmrCreateCluster.InstancesConfigProperty(
-                    # ec2_subnet_id=ec2.SubnetConfiguration(
-                    #                 name="emr_vpc",  # self.subnet_private_fargate_name,
-                    #                 subnet_type=ec2.SubnetType.PRIVATE,
-                    #                 cidr_mask=23,
-                    #             ),
                     instance_groups=[
                         sfnt.EmrCreateCluster.InstanceGroupConfigProperty(
                             instance_count=1,
@@ -142,6 +154,7 @@ class EmrTestStack(core.Stack):
                 release_label="emr-6.0.0",
                 log_uri=f"s3://{self.emr_logging_bucket.bucket_name}/{pipeline_name}"
             ),
+            # we output the ClusterId on the state machine status
             output_path="$.ClusterId",
             result_path="$.ClusterId",
         )
@@ -161,10 +174,11 @@ class EmrTestStack(core.Stack):
             self,
             "RunSparkExample",
             task=sfnt.EmrAddStep(
+                # the concrete ClusterId will be picked up from the current state of the statem achine
                 cluster_id=sfn.Data.string_at("$.ClusterId"),
                 name="SparkExample",
-                action_on_failure=sfnt.ActionOnFailure.CONTINUE,
-                integration_pattern=sfn.ServiceIntegrationPattern.SYNC,
+                # `command-runner.jar` is a jar from AWS that can be used to execute generic command (like `spark-submit`)
+                # if you write your programs in Java/Scala you can directly insert your jar file here instead of script location
                 jar="command-runner.jar",
                 args=[
                     "spark-submit",
@@ -278,7 +292,62 @@ class EmrTestStack(core.Stack):
 
 
 
-    # self, scope: core.Construct, id: str, base: BaseStack, **kwargs
+    ### GLUE STUFF
+    ### davor noch eine glue DB erzeugen die dann in Athena sichtbar ist
+    def _create_glue_db(self):
+        # db_name = f"{get_environment_name(stack)}_{zone.db_name}"
+        db_name = self.glue_db_name
+        db = glue.Database(
+            self,
+            f"{db_name}-id",
+            database_name=db_name,
+            location_uri=f"s3://{self.data_bucket.bucket_name}/",
+        )
+
+        return db
+
+    # Die rolle sollte man easy erstellen können mittels
+    def _create_glue_role(self):
+        return iam.Role(
+            self,
+            id=f"GlueServiceRole",
+            assumed_by=iam.ServicePrincipal("glue.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSGlueServiceRole"
+                ),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3FullAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMReadOnlyAccess"),
+            ],
+        )
+
+
+    def _create_glue_crawler(self):
+        s3_target = glue.CfnCrawler.S3TargetProperty(
+            # TODO exclusions auskommentieren
+            path=f"s3://{self.data_bucket.bucket_name}/", exclusions=["**"]
+        )
+        # schedule = "cron(30 5 * * ? *)"
+
+        db_name = self.glue_db_name
+
+        # der crawler wird mitsamt triggern initialisiert. Deshalb muss also kein extra Schritt in der StepFunctions definiert werden
+        # (es gibt sowieso keinen Stepfunction Task der das ausführen könnte
+        crawler = glue.CfnCrawler(
+            self,
+            id=f"glue-crawler-{db_name}",
+            name=f"{db_name}-crawl",
+            database_name=db_name,
+            role=self.glue_role.role_arn,
+            targets=glue.CfnCrawler.TargetsProperty(s3_targets=[s3_target]),
+            # schedule=glue.CfnCrawler.ScheduleProperty(schedule_expression=schedule),
+        )
+
+        return crawler
+
+
+
     def __init__(
         self, scope: core.Construct, id: str, **kwargs
     ) -> None:
@@ -286,8 +355,16 @@ class EmrTestStack(core.Stack):
 
         self.sfn_role = self._create_sfn_role().without_policy_updates()
         self.emr_logging_bucket = self._create_emr_logging_bucket()
+        self.data_bucket = self._create_data_bucket()
 
         self.emr_instance_role = create_emr_instance_role(self)
         self.emr_service_role = create_emr_service_role(self)
+
+        self.glue_db_name = f"dwh_udacity_capstone"
+        self.glue_db = self._create_glue_db()
+        self.glue_role = self._create_glue_role()
+        self.glue_crawler = self._create_glue_crawler()
+
+        # TODO create lambda & policy anfügen AWSGlueConsoleFullAccess, sodass sie den Trigger starten darf
 
         self._create_sfn_pipeline()
