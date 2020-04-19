@@ -37,6 +37,7 @@ def process_song_data(spark, input_data, output_data):
 	    output_data {str}: location (local/s3) where the (root) output files should be written
     """
     # get filepath to song data file
+    # song_data = f"{input_data}song_data/A/A/A/*.json"
     song_data = f"{input_data}song_data/*/*/*/*.json"
 
     # read song data file
@@ -182,7 +183,6 @@ def main():
     process_log_data(spark, input_data, output_data)
 
     spark.stop()
-
 
 if __name__ == "__main__":
     main()
