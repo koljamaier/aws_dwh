@@ -65,7 +65,7 @@ class UdacityCapstoneStack(core.Stack):
         This bucket will be the place where our EMR output data is stored. Also the glue crawler will use this
         for inferring our schemas
         """
-        bucket_name = f"capstone-uda-data1"
+        bucket_name = f"capstone-uda-data"
         bucket_id = f"{bucket_name}-bucket"
 
         bucket = s3.Bucket(
@@ -153,7 +153,7 @@ class UdacityCapstoneStack(core.Stack):
                             name="Master",
                         ),
                         sfnt.EmrCreateCluster.InstanceGroupConfigProperty(
-                            instance_count=2,
+                            instance_count=4,
                             instance_role=sfnt.EmrCreateCluster.InstanceRoleType.CORE,
                             instance_type="m5.xlarge",
                             name="Core",

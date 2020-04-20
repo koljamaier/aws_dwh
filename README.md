@@ -29,6 +29,83 @@ specialise on new data.
 Instead I used the well known sparkify data basis that we used throughout all projects. Hence, also my
 data model of choice is very similar with Fact table `songstable` and dimensions `artists`,
 `songs`, `time` and `users`.
+The datasets are available at `s3://udacity-dend/song_data` and `s3://udacity-dend/log_data`.
+
+
+The data is based on user activity data related to a music streaming app. 
+By making this data available in a DWH/DataLake we should be able to identify what songs users are listening to.
+Since the data is only available in JSON format, we need to establish ETL processes that transform the 
+data into a proper data model. 
+
+
+## Song Data
+This dataset stems from the Million Song Dataset. Each file is in JSON format and contains 
+metadata about a song and the artist of that song. The files are partitioned by the first three letters of 
+each song's track ID. For example, here are filepaths to two files in this dataset.
+
+
+```
+song_data/A/B/C/TRABCEI128F424C983.json
+song_data/A/A/B/TRAABJL12903CDCF1A.json
+
+```
+
+A single files content looks like:
+```json
+{"num_songs": 1, "artist_id": "ARJIE2Y1187B994AB7", "artist_latitude": null, "artist_longitude": null, "artist_location": "", "artist_name": "Line Renaud", "song_id": "SOUPIRU12A6D4FA1E1", "title": "Der Kleine Dompfaff", "duration": 152.92036, "year": 0}
+```
+
+## Log Data
+
+The second dataset consists of log files in JSON format.
+These simulate activity logs from a music streaming app based on specified configurations.
+
+The log files in the dataset you'll be working with are partitioned by year and month. For example,
+here are filepaths to two files in this dataset.
+
+```
+log_data/2018/11/2018-11-12-events.json
+log_data/2018/11/2018-11-13-events.json
+```
+Displaying the log data via `pandas` we get a better impression of what resides in the data (the code for that step is in the notebook `notebooks/explorative_analysis.ipynb`):
+
+![](.images/log_data_df.png) 
+
+### Notebooks
+You are invited to execute `notebooks/explorative_analysis.ipynb` via `jupyter notebook explorative_analysis.ipynb`, to
+have a look at the basics of the data and play around. I created this notebook for another udacity project submission. 
+The notebook operates only on a small subset of the data, which is stored unter `data/`.
+
+
+## Data Model & Data dictionary
+Taking the two datasets into account we form a star schema data model, like the following:
+
+### Fact Table
+```
+songplays - records in log data associated with song plays i.e. records with page NextSong
+songplay_id, start_time, user_id, level, song_id, artist_id, session_id, location, user_agent
+```
+
+### Dimension Tables
+```
+users - users in the app
+user_id, first_name, last_name, gender, level
+songs - songs in music database
+song_id, title, artist_id, year, duration
+artists - artists in music database
+artist_id, name, location, latitude, longitude
+time - timestamps of records in songplays broken down into specific units
+start_time, hour, day, week, month, year, weekday
+```
+
+
+With that data model we are very flexible to new business requirements. While this is a flexible setup for
+a business analyst, we might run into performance issues do to many joins that need to be performed when joining
+facts and dimensions together.
+
+### Data pipeline
+The ETL pipeline, which creates the presented data model, is written in PySpark. The code can be found under 
+`pyspark/example.py`. 
 
 
 # Deployment
@@ -149,3 +226,37 @@ You can now use Athena for querying the proposed data model.
 Note: You might need to set a query result location in Athena settings on the AWS UI
 
 ![](.images/athena_ui.png)
+
+
+# Outlook & Discussion
+
+My solution provides a nice way to dynamically spin up an EMR cluster and after work has been done, shut it down.
+While this is quite a nice 'serverless way', I found, that there is actually also the possibility to use a managed 
+AWS Service called `Glue` for that (which spins up a managed Spark cluster). This could be used in further
+iterations of this app.
+
+Some interesting discussion ponts:
+
+* How would we deal with the situation, if the data was increased by 100x?
+
+A big advantage of my proposed architecture is that everything is based on the cloud. Hence, we can leverage the
+elasticity and scale of the proposed cloud components. Concretely this would mean to adapt our worker nodes in `emr_stack.py`.
+In consequence we could flexible deal with a 100x increase of data.
+
+* How would we deal with the situation, if the pipelines were run on a daily basis by 7am?
+
+At the moment the ETL pipeline must be manually triggered via the Stepfunctions interface,
+as described above.
+For an automatic schedule we could leverage the `aws_cdk.aws_events.Schedule.cron` mehtod
+https://docs.aws.amazon.com/cdk/api/latest/python/aws_cdk.aws_events/Schedule.html which
+makes it possible to append a rule to our statemachine and trigger it whenever this event fires.
+And we would specify it with `.cron(0 7 * * *)` to run every morning
+at 7 a.m.
+
+
+* How would we deal with the situation, if the database needed to be accessed by 100+ people?
+
+Also here be can benefit from the scalability of the cloud. Or database in this case consists
+of the `S3` data store service, which allows massively parallel access from 100+ people.
+But since our users would not directly talk to `S3` the same must hold for our front end tool.
+In this case it is the managed service `Athena` which allows 
